@@ -1,77 +1,141 @@
+#encoding: utf-8
+begin
+  require "aprova_facil"
+rescue LoadError
+  raise "Could not load the aprova_facil gem.  Use `gem install aprova_facil` to install it."
+end
 module ActiveMerchant #:nodoc:
   module Billing #:nodoc:
     class AprovaFacilGateway < Gateway
-
+      
+      # The countries the gateway supports merchants from as 2 digit ISO country codes
       self.supported_countries = ['BR']
-      self.supported_cardtypes = [:visa, :master, :american_express, :dinners_club]
-
+      
+      # The card types supported by the payment gateway
+      self.supported_cardtypes = [:visa, :master, :american_express, :discover]
+      
+      # The homepage URL of the gateway
+      self.homepage_url = 'http://www.cobrebem.com/'
+      
+      # The name of the gateway
+      self.display_name = 'Aprova Fácil'
+      
       def initialize(options = {})
+        requires!(options, :login)
         @options = options
+        super
+
+        AprovaFacil::Config.usuario = @options[:login]
+        
+        if @options[:test]
+          AprovaFacil::Config.teste = true
+        end
+      end  
+      
+      def authorize(money, creditcard, options = {})
+        post = {}
+        add_invoice(post, options)
+        add_creditcard(post, creditcard)             
+        add_customer_data(post, options)
+        
+        commit('authonly', money, post)
+      end
+      
+      def purchase(money, creditcard, options = {})
+        post = {}
+        add_invoice(post, options)
+        add_creditcard(post, creditcard)        
+        add_customer_data(post, options)
+             
+        commit('sale', money, post)
+      end                       
+    
+      def capture(money, authorization, options = {})
+        post = {:transaction => authorization}
+        commit('capture', money, post)
       end
 
-      def authorize(money, creditcard, options = {})
-        card = add_creditcard(creditcard,options)
+      def void(authorization, options = {})
+        post = {:transaction => authorization}
+        commit('void', nil, post)
+      end
+    
+      private                       
+      
+      def add_customer_data(post, options)
+        if options.has_key? :email
+          post[:email] = options[:email]
+          post[:email_customer] = false
+        end
 
-        approval_response = gateway.aprovar(card)
-
-        if success?(approval_response)
-          Response.new(
-          approval_response[:aprovada],
-          approval_response[:resultado],
-          { :transaction_id => approval_response[:transacao] },
-          :authorization => approval_response[:codigo_autorizacao]
-        )
-        else
-          Response.new(
-            approval_response[:aprovada],
-            approval_response[:resultado],
-            { :transaction_id => approval_response[:transacao] },
-            :authorization => approval_response[:codigo_autorizacao]
-          )
+        if options.has_key? :ip
+          post[:ip_comprador] = options[:ip]
         end
       end
 
-      def capture(money, authorization, options = {})
-        binding.pry
-          capture_response = gateway.capturar(authorization)
-          if success?(capture_response)
-            #response_to_spree(approval_response,capture_response)
-          else
-            Response.new false, approval_response[:resultado]
+      def add_invoice(post, options)
+        post[:documento] = options[:order_id]
+      end
+      
+      def add_creditcard(post, creditcard)  
+        post[:numero_cartao]   = creditcard.number
+        post[:codigo_seguranca]  = creditcard.verification_value if creditcard.verification_value?
+        post[:ano_validade]   = creditcard.year.to_s[-2,2]
+        post[:mes_validade]   = sprintf("%.2i",creditcard.month).to_s
+        post[:nome_portador] = "#{creditcard.first_name}  #{creditcard.last_name}"
+        post[:bandeira] = code_for_brand_of creditcard
+      end
+
+
+      
+      def commit(action, money, parameters)
+
+        parameters[:valor] = format_amount(money.to_f)
+
+        cartao = AprovaFacil::CartaoCredito.new(parameters)
+
+        case action
+        when 'authonly'
+          resultado = gateway.aprovar(cartao)
+          parameters[:transaction] = resultado[:transacao]
+        when 'sale'
+          resultado = gateway.aprovar(cartao)
+          if resultado[:aprovada]
+            resultado = resultado.merge gateway.capturar(resultado[:transacao])
+            parameters[:transaction] = resultado[:transacao]
           end
 
-      end
-
-      def purchase(money, creditcard, options = {})
-        approves_transaction(creditcard, options)
-      end
-
-      # testar ainda
-      def credit(money, creditcard, options = {})
-        credit_response = gateway.cancelar(creditcard.transacao_anterior)
-        if credited?(credit_response)
-          response_to_spree_to_credit(credit_response)
-        else
-          response_to_spree_to_credit(credit_response)
+        when 'capture'
+          resultado = gateway.capturar(parameters[:transaction])
+        when 'void'
+          resultado = gateway.cancelar parameters[:transaction]
         end
+
+
+        Response.new(success?(resultado), resultado[:resultado], {:transaction_id => parameters[:transaction]} , 
+          :test => test?, 
+          :authorization => resultado[:codigo_autorizacao]
+        )
       end
 
-      #def create_profile(creditcard, gateway_options)
-      #  if creditcard.gateway_customer_profile_id.nil?
-      #    profile_hash = create_customer_profile(creditcard, gateway_options)
-      #    creditcard.update_attributes(:gateway_customer_profile_id => profile_hash[:customer_profile_id], :gateway_payment_profile_id => profile_hash[:customer_payment_profile_id])
-      #  end
-      #end
-
-
-  private
-
-      def success?(response)
-        response[:aprovada] || response[:capturado]
+      def message_from(response)
       end
+      
+      def post_data(action, parameters = {})
+      end
+
+      private
 
       def gateway
         @gateway ||= AprovaFacil.new
+      end
+
+      def success?(response)
+        response[:aprovada] || response[:capturado] || response[:cancelado]
+      end
+
+      def format_amount(amount)
+        amount / 100
       end
 
       def code_for_brand_of(creditcard)
@@ -82,62 +146,6 @@ module ActiveMerchant #:nodoc:
         when 'diners_club'      then AprovaFacil::CartaoCredito::Bandeira::DINERS
         end
       end
-
-      def last_digits_from(string)
-        string[-2,2]
-      end
-
-      def creditcard_month(month)
-        if month.to_i < 10
-          "0#{month}"
-        else
-          month
-        end
-      end
-
-      def full_name_from(creditcard)
-        "#{creditcard[:first_name]} #{creditcard[:last_name]}"
-      end
-
-      def add_creditcard(creditcard, options = {})
-        AprovaFacil::CartaoCredito.new(
-         :valor            => options[:subtotal].to_f / 100,
-         :numero_cartao    => creditcard.number,
-         :codigo_seguranca => creditcard.verification_value,
-         :mes_validade     => creditcard_month(creditcard.month),
-         :ano_validade     => last_digits_from(creditcard.year),
-         :bandeira         => code_for_brand_of(creditcard),
-         :ip_comprador     => options[:ip],
-         :nome_portador    => full_name_from(creditcard)
-        )
-      end
-
-      def response_to_spree(approval_response,capture_response)
-        Response.new(
-          capture_response[:capturado],
-          capture_response[:resultado],
-          { :transaction_id => approval_response[:transacao] },
-          :authorization => approval_response[:codigo_autorizacao]
-        )
-      end
-
-      def approves_transaction(creditcard, options)
-        card = add_creditcard(creditcard,options)
-
-        approval_response = gateway.aprovar(card)
-        if success?(approval_response)
-          capture_response = gateway.capturar(approval_response[:transacao])
-          if success?(capture_response)
-            response_to_spree(approval_response,capture_response)
-          else
-            response_to_spree(approval_response,capture_response)
-          end
-        else
-          Response.new false, approval_response[:resultado]
-        end
-      end
-
     end
   end
 end
-

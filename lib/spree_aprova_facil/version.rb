@@ -1,3 +1,3 @@
-module SpreeAprovaFacil2
-  VERSION = "0.0.1"
+module SpreeAprovaFacil
+  VERSION = "0.9.0"
 end

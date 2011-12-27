@@ -6,10 +6,10 @@ Gem::Specification.new do |s|
   s.name        = "spree_aprova_facil"
   s.version     = SpreeAprovaFacil::VERSION
   s.authors     = ["Raphael Costa"]
-  s.email       = ["raphael@experia.com.br"]
+  s.email       = ["raphael@raphaelcosta.net"]
   s.homepage    = ""
-  s.summary     = %q{TODO: Write a gem summary}
-  s.description = %q{TODO: Write a gem description}
+  s.summary     = %q{Aprova Fácil Payment Gateway to Spree}
+  s.description = %q{Aprova Fácil Payment Gateway to Spree}
 
   s.rubyforge_project = "spree_aprova_facil"
 
@@ -20,4 +20,5 @@ Gem::Specification.new do |s|
 
   s.add_runtime_dependency "spree_core", '>= 0.60.1'
   s.add_runtime_dependency "aprova_facil", '>= 1.2.0'
+
 end
